@@ -1,0 +1,157 @@
+import React, { useState, useCallback } from 'react';
+import { Question, UserAnswer, GrammarCategory, QuizPhase, UserLevel } from '../types';
+import { categoryInfo, levelInfo } from '../data/questions';
+import { useTts } from '../contexts/TtsContext';
+import QuestionCard from './QuestionCard';
+import ExplanationPopup from './ExplanationPopup';
+import mikuFlower from '../assets/miku-flower.png';
+
+interface Props {
+  category: GrammarCategory;
+  phase: QuizPhase;
+  questions: Question[];
+  userLevel: UserLevel;
+  onPhaseDone: (answers: UserAnswer[], wrongIds: string[]) => void;
+}
+
+const phaseLabel: Record<QuizPhase, string> = {
+  main: 'Основные вопросы',
+  retry: 'Повторная попытка',
+  remedial: 'Дополнительная практика',
+};
+
+const QuizView: React.FC<Props> = ({ category, phase, questions, userLevel, onPhaseDone }) => {
+  const [qIdx, setQIdx] = useState(0);
+  const [answers, setAnswers] = useState<UserAnswer[]>([]);
+  const [wrongIds, setWrongIds] = useState<string[]>([]);
+  const [showExplanation, setShowExplanation] = useState(false);
+  const [lastWrongQ, setLastWrongQ] = useState<Question | null>(null);
+  const [lastWrongInput, setLastWrongInput] = useState('');
+  const [pending, setPending] = useState<{ ans: UserAnswer[], wrong: string[] } | null>(null);
+  const [feedbackState, setFeedbackState] = useState<'idle' | 'correct' | 'incorrect'>('idle');
+  const [phaseComplete, setPhaseComplete] = useState(false);
+  const { speed, setSpeed } = useTts();
+
+  const catInfo = categoryInfo[category];
+  const pct = questions.length > 0 ? Math.round((qIdx / questions.length) * 100) : 0;
+
+  const finishPhase = useCallback((finalAns: UserAnswer[], finalWrong: string[]) => {
+    setPhaseComplete(true);
+    setTimeout(() => {
+      setPhaseComplete(false);
+      setQIdx(0);
+      setAnswers([]);
+      setWrongIds([]);
+      setFeedbackState('idle');
+      onPhaseDone(finalAns, finalWrong);
+    }, 1200);
+  }, [onPhaseDone]);
+
+  const handleAnswer = useCallback((q: Question, input: string, isCorrect: boolean) => {
+    const ua: UserAnswer = {
+      questionId: q.id, category: q.category, stage: q.stage,
+      isCorrect, userInput: input, timestamp: Date.now(),
+    };
+    const newAns = [...answers, ua];
+    const newWrong = isCorrect ? wrongIds : [...wrongIds, q.id];
+    setAnswers(newAns);
+    setWrongIds(newWrong);
+    setFeedbackState(isCorrect ? 'correct' : 'incorrect');
+
+    if (!isCorrect) {
+      setLastWrongQ(q);
+      setLastWrongInput(input);
+      setPending({ ans: newAns, wrong: newWrong });
+      setTimeout(() => setShowExplanation(true), 300);
+    } else {
+      setTimeout(() => {
+        const next = qIdx + 1;
+        if (next < questions.length) {
+          setQIdx(next);
+          setFeedbackState('idle');
+        } else {
+          finishPhase(newAns, newWrong);
+        }
+      }, 700);
+    }
+  }, [answers, wrongIds, qIdx, questions, phase, finishPhase]);
+
+  const handleExplContinue = useCallback(() => {
+    setShowExplanation(false);
+    const next = qIdx + 1;
+    if (next < questions.length) {
+      setQIdx(next);
+      setFeedbackState('idle');
+    } else if (pending) {
+      finishPhase(pending.ans, pending.wrong);
+      setPending(null);
+    }
+  }, [qIdx, questions, pending, finishPhase]);
+
+  if (phaseComplete) {
+    return (
+      <div className="phase-complete-screen">
+        <img src={mikuFlower} alt="미쿠" className="phase-miku" />
+        <p className="phase-complete-text">
+          {phase === 'main' && wrongIds.length > 0 && '틀린 문제를 다시 풀어봐요!'}
+          {phase === 'main' && wrongIds.length === 0 && '완벽해요! 🎉'}
+          {phase === 'retry' && wrongIds.length > 0 && '조금 더 연습해봐요 💪'}
+          {phase === 'retry' && wrongIds.length === 0 && '잘했어요! 👏'}
+          {phase === 'remedial' && '수고했어요! 🌸'}
+        </p>
+      </div>
+    );
+  }
+
+  const q = questions[qIdx];
+
+  return (
+    <div className="quiz-view">
+      <header className="qv-header">
+        <div className="qv-header-row">
+          <div className="qv-cat-badge">{catInfo.emoji} {catInfo.nameRu}</div>
+          <div className="qv-phase-badge">{phaseLabel[phase]}</div>
+          <div className="qv-progress-count">{qIdx + 1} / {questions.length}</div>
+        </div>
+        <div className="qv-progress-track">
+          <div className="qv-progress-fill" style={{ width: `${pct}%` }} />
+        </div>
+        {/* TTS Speed selector */}
+        <div className="qv-speed-row">
+          <span className="qv-speed-label">🔊</span>
+          {[1.0, 0.6].map(s => (
+            <button
+              key={s}
+              className={`qv-speed-btn ${speed === s ? 'qv-speed-active' : ''}`}
+              onClick={() => setSpeed(s)}
+              type="button"
+            >
+              {s === 1.0 ? '1.0×' : '0.6×'}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main className="qv-main">
+        {q && (
+          <QuestionCard
+            key={`${q.id}-${qIdx}`}
+            question={q}
+            feedbackState={feedbackState}
+            onAnswer={handleAnswer}
+          />
+        )}
+      </main>
+
+      {showExplanation && lastWrongQ && (
+        <ExplanationPopup
+          question={lastWrongQ}
+          userInput={lastWrongInput}
+          onContinue={handleExplContinue}
+        />
+      )}
+    </div>
+  );
+};
+
+export default QuizView;
